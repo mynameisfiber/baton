@@ -1,0 +1,4 @@
+venv
+*.sw*
+__pycache__
+tmp/
