@@ -50,21 +50,24 @@ class ExperimentWorker(object):
             return web.json_response({"err": "Wrong Client"}, status=404)
         self.last_update = update_name = data['update_name']
         self.model.load_state_dict(data['state_dict'])
-        asyncio.ensure_future(self._run_round(update_name))
+        n_epoch = data['n_epoch']
+        asyncio.ensure_future(self._run_round(update_name, n_epoch))
         return web.json_response("OK")
 
-    async def _run_round(self, update_name):
+    async def _run_round(self, update_name, n_epoch):
         data, n_samples = self.get_data()
-        self.model.train(*data)
-        await self.report_update(update_name, n_samples)
+        loss_history = self.model.train(*data, n_epoch=n_epoch)
+        await self.report_update(update_name, n_samples, loss_history)
 
-    async def report_update(self, update_name, n_samples):
+    async def report_update(self, update_name, n_samples, loss_history):
         url = urljoin(self.manager_url, 'update')
-        state = {}
-        state['state_dict'] = self.model.state_dict()
-        state['client_id'] = self.client_id
-        state['n_samples'] = n_samples
-        state['update_name'] = update_name
+        state = {
+            'state_dict':  self.model.state_dict(),
+            'client_id':  self.client_id,
+            'n_samples':  n_samples,
+            'update_name':  update_name,
+            'loss_history':  loss_history,
+        }
         data = pickle.dumps(state)
         async with self._session.post(url, data=data) as resp:
             if resp.status == 200:

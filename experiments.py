@@ -36,6 +36,7 @@ class Model(nn.Module):
         loss = nn.CrossEntropyLoss()
         idxs = torch.randperm(X.shape[0])
         optimizer = optim.SGD(self.parameters(), lr=lr)
+        loss_history = []
         for epoch in range(n_epoch):
             batch_iter = EpochProgress(epoch, torch.split(idxs, batch_size),
                                        verbose=verbose)
@@ -48,6 +49,8 @@ class Model(nn.Module):
                 batch_iter.update_loss(loss_batch)
                 loss_batch.backward()
                 optimizer.step()
+            loss_history.append(batch_iter.loss)
+        return loss_history
 
 
 def client_update(state_dict):

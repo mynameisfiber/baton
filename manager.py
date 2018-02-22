@@ -29,6 +29,7 @@ class Experiment(object):
 
         self._n_updates = 0
         self._update_state = {}
+        self._update_loss_history = []
 
     def register_handlers(self):
         self.app.router.add_get(
@@ -43,12 +44,26 @@ class Experiment(object):
             '/{}/start_round'.format(self.name),
             self.trigger_start_round,
         )
+        self.app.router.add_get(
+            '/{}/loss_history'.format(self.name),
+            self.get_loss_history,
+        )
+
+    async def get_loss_history(self, request):
+        return web.json_response(self._update_loss_history)
 
     async def trigger_start_round(self, request):
-        status = await self.start_round()
+        try:
+            n_epoch = int(request.query['n_epoch'])
+        except KeyError:
+            n_epoch = 32
+        except ValueError:
+            return web.json_response({"err": "Invalid Epoch Value"},
+                                     status=400)
+        status = await self.start_round(n_epoch)
         return web.json_response(status)
 
-    async def start_round(self):
+    async def start_round(self, n_epoch):
         if self._update_state.get('in_progress', False):
             raise Exception("Update already in progress")
         update_name = "update_{}_{:05d}".format(self.name, self._n_updates)
@@ -57,17 +72,22 @@ class Experiment(object):
             'clients': set(),
             'clients_done': set(),
             'client_responses': dict(),
+            'n_epoch': n_epoch,
             'in_progress': True,
         }
-        return await asyncio.gather(*[self._notify_round_start(c, update_name)
-                                      for c in self.clients])
+        return await asyncio.gather(
+            *[self._notify_round_start(update_name, c, n_epoch)
+              for c in self.clients]
+        )
 
-    async def _notify_round_start(self, client_id, update_name):
+    async def _notify_round_start(self, update_name, client_id, n_epoch):
         url = urljoin(self.clients[client_id]['url'], 'round_start')
-        data = {}
-        data['state_dict'] = self.model.state_dict()
-        data['update_name'] = update_name
-        data['client_id'] = client_id
+        data = {
+            'state_dict':  self.model.state_dict(),
+            'update_name':  update_name,
+            'client_id':  client_id,
+            'n_epoch':  n_epoch,
+        }
         data_pkl = pickle.dumps(data)
         try:
             async with self._session.post(url, data=data_pkl) as resp:
@@ -113,6 +133,11 @@ class Experiment(object):
         self._update_state['client_responses'][client_id] = data
         self.clients[client_id]['last_update'] = update_name
         self.clients[client_id]['num_updates'] += 1
+        print("Update finished: {} [{}/{}]".format(
+            client_id,
+            len(self._update_state['clients_done']),
+            len(self._update_state['clients']))
+        )
 
         if (self._update_state['clients'] == self._update_state['clients_done']
                 or force_end):
@@ -124,7 +149,12 @@ class Experiment(object):
                 weight_sum = (d['state_dict'][key] * d['n_samples']
                               for d in datas)
                 value[:] = sum(weight_sum) / N
+            for epoch in range(self._update_state['n_epoch']):
+                epoch_loss = sum(d['loss_history'][epoch]*d['n_samples']
+                                 for d in datas)
+                self._update_loss_history.append(epoch_loss / N)
             print("Finished update:", self._update_state['name'])
+            print("Final Loss:", self._update_loss_history[-1])
         return web.json_response("OK")
 
 
