@@ -1,13 +1,13 @@
 import asyncio
 import aiohttp
+import pickle
 from aiohttp import web
 from urllib.parse import urljoin
-import pickle
 from datetime import datetime, timedelta
 
-from experiments import Model
-from utils import random_key, PeriodicTask
-
+from utils import random_key
+from utils import PeriodicTask
+from utils import json_clean
 
 
 class Manager(object):
@@ -17,12 +17,12 @@ class Manager(object):
 
     def register_experiment(self, model, name=None):
         name = name or getattr(model, 'name', hash(model))
-        experiment = Experiment(name, app, model)
+        experiment = Experiment(name, self.app, model)
         self.experiments.append(experiment)
 
 
 class Experiment(object):
-    def __init__(self, name, app, model, client_ttl=10):
+    def __init__(self, name, app, model, client_ttl=300):
         self.name = name
         self.model = model
         self.app = app
@@ -36,7 +36,6 @@ class Experiment(object):
         self._update_loss_history = []
         self._stale_manager = PeriodicTask(self.cull_clients,
                                            client_ttl//2).start()
-
 
     def register_handlers(self):
         self.app.router.add_get(
@@ -56,11 +55,16 @@ class Experiment(object):
             self.get_loss_history,
         )
         self.app.router.add_get(
+            '/{}/clients'.format(self.name),
+            self.get_clients,
+        )
+        self.app.router.add_get(
             '/{}/heartbeat'.format(self.name),
             self.heartbeat,
         )
 
     async def heartbeat(self, request):
+        # TODO: special client handler object to do all this and culling?
         data = await request.json()
         client_id = data['client_id']
         key = data['key']
@@ -68,10 +72,17 @@ class Experiment(object):
             print("Invalid heartbeat: Unknown Client:", client_id)
             return web.json_response({'err': "Invalid Client"}, status=401)
         elif self.clients[client_id]['key'] != key:
+            print(key)
+            print(self.clients[client_id])
             print("Invalid heartbeat: Invalid Key:", client_id)
             return web.json_response({'err': "Invalid Key"}, status=401)
         self.clients[client_id]['last_heartbeat'] = datetime.now()
         return web.json_response("OK")
+
+    async def get_clients(self, request):
+        data = [json_clean(client)
+                for client in self.clients.values()]
+        return web.json_response(data)
 
     async def get_loss_history(self, request):
         return web.json_response(self._update_loss_history)
@@ -141,7 +152,8 @@ class Experiment(object):
 
     async def register(self, request):
         data = await request.json()
-        client_id = "client_{}_{:08d}".format(self.name, len(self.clients))
+        remote = request.remote
+        client_id = "client_{}_{}".format(self.name, random_key(6))
         key = random_key()
         state = {
             'client_id': client_id,
@@ -151,7 +163,8 @@ class Experiment(object):
                                         self.name)
         self.clients[client_id] = client = {
             "key": key,
-            "remote": request.remote,
+            "client_id": client_id,
+            "remote": remote,
             "port": data['port'],
             "last_heartbeat": datetime.now(),
             "url": url,
@@ -204,11 +217,3 @@ class Experiment(object):
             print("Finished update:", self._update_state['name'])
             print("Final Loss:", self._update_loss_history[-1])
         return web.json_response("OK")
-
-
-if __name__ == "__main__":
-    app = web.Application()
-    manager = Manager(app)
-    model = Model()
-    manager.register_experiment(model)
-    web.run_app(app, port=8080)

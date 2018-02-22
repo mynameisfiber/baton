@@ -3,8 +3,32 @@ from contextlib import suppress
 
 from tqdm import tqdm
 from collections import Iterator
+from datetime import datetime
 import random
 import string
+
+
+def ensure_no_collision(fxn):
+    lock = asyncio.Lock()
+
+    async def _(*args, **kwargs):
+        if lock.locked():
+            print("{} already running".format(fxn.__name__))
+            return
+        async with lock:
+            return await fxn(*args, **kwargs)
+    return _
+
+
+def json_clean(data):
+    cleaned = {}
+    for k, v in data.items():
+        if k == "key":
+            continue
+        elif isinstance(v, datetime):
+            v = str(v)
+        cleaned[k] = v
+    return cleaned
 
 
 def random_key(length=32):
@@ -34,7 +58,7 @@ class PeriodicTask(object):
                 await self._task
 
     async def _run(self):
-        while True:
+        while self.is_started:
             await asyncio.sleep(self.time)
             await self.func()
 

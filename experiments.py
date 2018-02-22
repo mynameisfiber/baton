@@ -3,12 +3,13 @@ from torch import nn
 from torch import optim
 from torch.nn import functional
 from torch import autograd
-
-import random
-from copy import deepcopy
-from multiprocessing import Pool
+from aiohttp import web
 
 from utils import EpochProgress
+from manager import Manager
+from worker import ExperimentWorker
+
+import random
 
 
 class Model(nn.Module):
@@ -53,29 +54,27 @@ class Model(nn.Module):
         return loss_history
 
 
-def client_update(state_dict):
-    n = random.randint(5, 20)
-    print(n)
-    X = torch.randn(32*n, 28*28)
-    _, y = torch.randn(32*n, 10).max(1)
-    model = Model()
-    model.load_state_dict(state_dict)
-    model.train(X, y, verbose=False)
-    return model.state_dict(), n*32
-
-
-def fedavg(num_clients):
-    model = Model()
-    with Pool(num_clients) as client_pool:
-        for i in range(10):
-            print("Epoch:", i)
-            params = [deepcopy(model.state_dict())
-                      for _ in range(num_clients)]
-            results = client_pool.map(client_update, params)
-            N = sum(r[1] for r in results)
-            for key, value in model.state_dict().items():
-                value[:] = sum(r[0][key] * r[1] for r in results) / N
+class LinearTestWorker(ExperimentWorker):
+    def get_data(self):
+        n = random.randint(5, 20)
+        X = torch.randn(32*n, 28*28)
+        _, y = torch.randn(32*n, 10).max(1)
+        return (X, y), n*32
 
 
 if __name__ == "__main__":
-    fedavg(4)
+    import sys
+    role = sys.argv[1]
+    host = sys.argv[2]
+    port = int(sys.argv[3])
+    app = web.Application()
+
+    if role == 'manager':
+        app = web.Application()
+        manager = Manager(app)
+        model = Model()
+        manager.register_experiment(model)
+    elif role == 'worker':
+        model = Model()
+        worker = LinearTestWorker(app, model, host, port=port)
+    web.run_app(app, port=port)

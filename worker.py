@@ -1,18 +1,17 @@
 from urllib.parse import urljoin
-import torch
-import random
 import pickle
 
 import asyncio
 import aiohttp
 from aiohttp import web
 
-from experiments import Model
 from utils import PeriodicTask
+from utils import ensure_no_collision
 
 
 class ExperimentWorker(object):
-    def __init__(self, app, model, manager, name=None, port=8080, heartbeat_time=5):
+    def __init__(self, app, model, manager, name=None, port=8080,
+                 heartbeat_time=60):
         self.name = name or getattr(model, 'name', hash(model))
         self.model = model
         self.app = app
@@ -28,8 +27,10 @@ class ExperimentWorker(object):
         self.key = None
         self.heartbeat_time = heartbeat_time
         self._heartbeat_manager = None
+        self._heartbeat_lock = asyncio.Lock()
         asyncio.ensure_future(self.register_with_manager())
 
+    @ensure_no_collision
     async def register_with_manager(self):
         url = urljoin(self.manager_url, 'register')
         data = {'port': self.port}
@@ -46,27 +47,29 @@ class ExperimentWorker(object):
                 self.heartbeat_time,
             ).start()
 
-    async def heartbeat(self, timeout=1):
-        url = urljoin(self.manager_url, 'heartbeat')
-        data = {
-            'client_id': self.client_id,
-            'key': self.key,
-        }
-        try:
-            async with self._session.get(url, json=data) as resp:
-                if resp.status == 200:
-                    print(".", end='')
-                    return
-                elif resp.status == 401:
-                    print("Reregistering with manager")
-                    await self.register_with_manager()
-                    return
-        except aiohttp.client_exceptions.ClientConnectorError:
-            pass
-        print("Could not connect to master, waiting:", timeout)
-        await asyncio.sleep(timeout)
-        await self.heartbeat(timeout*2)
-        return
+    @ensure_no_collision
+    async def heartbeat(self):
+        timeout = 1
+        while True:
+            url = urljoin(self.manager_url, 'heartbeat')
+            data = {
+                'client_id': self.client_id,
+                'key': self.key,
+            }
+            try:
+                async with self._session.get(url, json=data) as resp:
+                    if resp.status == 200:
+                        print(".", end='', flush=True)
+                        return
+                    elif resp.status == 401:
+                        print("Reregistering with manager")
+                        return await self.register_with_manager()
+            except aiohttp.client_exceptions.ClientConnectorError:
+                pass
+            print("Could not connect to master, waiting:", timeout)
+            await asyncio.sleep(timeout)
+            # TODO: better backoff
+            timeout *= 2
 
     def register_handlers(self):
         self.app.router.add_post(
@@ -111,17 +114,4 @@ class ExperimentWorker(object):
                 await self.register_with_manager()
 
     def get_data(self):
-        n = random.randint(5, 20)
-        X = torch.randn(32*n, 28*28)
-        _, y = torch.randn(32*n, 10).max(1)
-        return (X, y), n*32
-
-
-if __name__ == "__main__":
-    import sys
-    host = sys.argv[1]
-    port = int(sys.argv[2])
-    app = web.Application()
-    model = Model()
-    worker = ExperimentWorker(app, model, host, port=port)
-    web.run_app(app, port=port)
+        raise NotImplementedError
