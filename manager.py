@@ -51,7 +51,7 @@ class Experiment(object):
     async def start_round(self):
         if self._update_state.get('in_progress', False):
             raise Exception("Update already in progress")
-        update_name = "{}_{:05d}".format(self.name, self._n_updates)
+        update_name = "update_{}_{:05d}".format(self.name, self._n_updates)
         self._update_state = {
             'name': update_name,
             'clients': set(),
@@ -82,7 +82,7 @@ class Experiment(object):
 
     async def register(self, request):
         data = await request.json()
-        client_id = "{}_{:08d}".format(self.name, len(self.clients))
+        client_id = "client_{}_{:08d}".format(self.name, len(self.clients))
         state = {
             'client_id': client_id,
         }
@@ -105,9 +105,9 @@ class Experiment(object):
         client_id = data['client_id']
         update_name = data['update_name']
 
-        if (not self._update_state['in_progress'] or
+        if (not self._update_state.get('in_progress', False) or
                 update_name != self._update_state['name']):
-            return web.json_response({'error': "Wrong Update"}, status=401)
+            return web.json_response({'error': "Wrong Update"}, status=410)
 
         self._update_state['clients_done'].add(client_id)
         self._update_state['client_responses'][client_id] = data
@@ -132,5 +132,5 @@ if __name__ == "__main__":
     app = web.Application()
     manager = Manager(app)
     model = Model()
-    manager.register_experiment(model, "exp1")
+    manager.register_experiment(model)
     web.run_app(app, port=8080)

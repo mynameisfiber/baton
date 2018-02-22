@@ -11,23 +11,24 @@ from experiments import Model
 
 
 class ExperimentWorker(object):
-    def __init__(self, name, app, model, manager, port=8080):
-        self.name = name
+    def __init__(self, app, model, manager, name=None, port=8080):
+        self.name = name or getattr(model, 'name', hash(model))
         self.model = model
         self.app = app
         self.port = port
         self.manager = manager
-        self.manager_url = "http://{}/{}/".format(manager, name)
+        self.manager_url = "http://{}/{}/".format(manager, self.name)
         self._session = aiohttp.ClientSession()
         self.register_handlers()
         self.n_updates = 0
+        self.update_in_progress = False
         self.last_update = None
         asyncio.ensure_future(self.register_with_manager())
 
     async def register_with_manager(self):
         url = urljoin(self.manager_url, 'register')
         data = {'port': self.port}
-        print("registering with:",url)
+        print("registering with:", url)
         async with self._session.get(url, json=data) as resp:
             response = await resp.json()
             self.client_id = response['client_id']
@@ -40,6 +41,9 @@ class ExperimentWorker(object):
         )
 
     async def round_start(self, request):
+        if self.update_in_progress:
+            return web.json_response({"err": "Update in Progress"},
+                                     status=409)
         body = await request.read()
         data = pickle.loads(body)
         if data['client_id'] != self.client_id:
@@ -78,5 +82,5 @@ if __name__ == "__main__":
     port = int(sys.argv[1])
     app = web.Application()
     model = Model()
-    worker = ExperimentWorker("exp1", app, model, 'localhost:8080', port)
+    worker = ExperimentWorker(app, model, 'localhost:8080', port=port)
     web.run_app(app, port=port)

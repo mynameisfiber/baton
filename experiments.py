@@ -12,6 +12,8 @@ from utils import EpochProgress
 
 
 class Model(nn.Module):
+    name = "lineartest"
+
     def __init__(self):
         super().__init__()
         self.fc1 = nn.Linear(28*28, 100)
