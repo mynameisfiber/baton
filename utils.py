@@ -23,10 +23,14 @@ def ensure_no_collision(fxn):
 def json_clean(data):
     cleaned = {}
     for k, v in data.items():
-        if k == "key":
+        if k in ("key", "state_dict"):
             continue
         elif isinstance(v, datetime):
             v = str(v)
+        elif isinstance(v, set):
+            v = tuple(v)
+        elif isinstance(v, dict):
+            v = json_clean(v)
         cleaned[k] = v
     return cleaned
 

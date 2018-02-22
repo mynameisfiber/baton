@@ -10,6 +10,10 @@ from utils import PeriodicTask
 from utils import json_clean
 
 
+class UpdateInProgress(Exception):
+    pass
+
+
 class Manager(object):
     def __init__(self, app):
         self.app = app
@@ -49,6 +53,10 @@ class Experiment(object):
         self.app.router.add_get(
             '/{}/start_round'.format(self.name),
             self.trigger_start_round,
+        )
+        self.app.router.add_get(
+            '/{}/end_round'.format(self.name),
+            self.trigger_end_round,
         )
         self.app.router.add_get(
             '/{}/loss_history'.format(self.name),
@@ -95,8 +103,16 @@ class Experiment(object):
         except ValueError:
             return web.json_response({"err": "Invalid Epoch Value"},
                                      status=400)
-        status = await self.start_round(n_epoch)
+        try:
+            status = await self.start_round(n_epoch)
+        except UpdateInProgress:
+            return web.json_response({'err': "Update already in progress"},
+                                     status=423)
         return web.json_response(status)
+
+    async def trigger_end_round(self, request):
+        self.end_round()
+        return web.json_response(json_clean(self._update_state))
 
     async def cull_clients(self):
         now = datetime.now()
@@ -110,7 +126,7 @@ class Experiment(object):
 
     async def start_round(self, n_epoch):
         if self._update_state.get('in_progress', False):
-            raise Exception("Update already in progress")
+            raise UpdateInProgress
         update_name = "update_{}_{:05d}".format(self.name, self._n_updates)
         print("Starting update:", update_name)
         await self.cull_clients()
@@ -174,7 +190,7 @@ class Experiment(object):
         print("Registered client:", client_id, client['remote'], client['port'])
         return web.json_response(state)
 
-    async def update(self, request, force_end=False):
+    async def update(self, request):
         body = await request.read()
         data = pickle.loads(body)
 
@@ -200,20 +216,28 @@ class Experiment(object):
             len(self._update_state['clients']))
         )
 
-        if (self._update_state['clients'] == self._update_state['clients_done']
-                or force_end):
-            self._update_state['in_progress'] = False
-            self._n_updates += 1
-            datas = self._update_state['client_responses'].values()
-            N = sum(d['n_samples'] for d in datas)
-            for key, value in self.model.state_dict().items():
-                weight_sum = (d['state_dict'][key] * d['n_samples']
-                              for d in datas)
-                value[:] = sum(weight_sum) / N
-            for epoch in range(self._update_state['n_epoch']):
-                epoch_loss = sum(d['loss_history'][epoch]*d['n_samples']
-                                 for d in datas)
-                self._update_loss_history.append(epoch_loss / N)
-            print("Finished update:", self._update_state['name'])
-            print("Final Loss:", self._update_loss_history[-1])
+        if self._update_state['clients'] == self._update_state['clients_done']:
+            self.end_round()
         return web.json_response("OK")
+
+    def end_round(self):
+        if not self._update_state.get('in_progress', False):
+            return
+        print("Finishing update:", self._update_state['name'])
+        self._update_state['in_progress'] = False
+        self._n_updates += 1
+        datas = self._update_state['client_responses'].values()
+        N = sum(d['n_samples'] for d in datas)
+        if not N:
+            print("No responses for update:", self._update_state['name'])
+            return
+        for key, value in self.model.state_dict().items():
+            weight_sum = (d['state_dict'][key] * d['n_samples']
+                          for d in datas)
+            value[:] = sum(weight_sum) / N
+        for epoch in range(self._update_state['n_epoch']):
+            epoch_loss = sum(d['loss_history'][epoch]*d['n_samples']
+                             for d in datas)
+            self._update_loss_history.append(epoch_loss / N)
+        print("Finished update:", self._update_state['name'])
+        print("Final Loss:", self._update_loss_history[-1])
