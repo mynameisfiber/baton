@@ -112,6 +112,8 @@ class ExperimentWorker(object):
                 self.n_updates += 1
             elif resp.status == 401:
                 await self.register_with_manager()
+            elif resp.status == 410:
+                print("Sent wrong update")
 
     def get_data(self):
         raise NotImplementedError
