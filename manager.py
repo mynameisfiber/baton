@@ -3,8 +3,11 @@ import aiohttp
 from aiohttp import web
 from urllib.parse import urljoin
 import pickle
+from datetime import datetime, timedelta
 
 from experiments import Model
+from utils import random_key, PeriodicTask
+
 
 
 class Manager(object):
@@ -19,7 +22,7 @@ class Manager(object):
 
 
 class Experiment(object):
-    def __init__(self, name, app, model):
+    def __init__(self, name, app, model, client_ttl=10):
         self.name = name
         self.model = model
         self.app = app
@@ -27,9 +30,13 @@ class Experiment(object):
         self._session = aiohttp.ClientSession()
         self.register_handlers()
 
+        self.client_ttl = timedelta(seconds=client_ttl)
         self._n_updates = 0
         self._update_state = {}
         self._update_loss_history = []
+        self._stale_manager = PeriodicTask(self.cull_clients,
+                                           client_ttl//2).start()
+
 
     def register_handlers(self):
         self.app.router.add_get(
@@ -48,6 +55,23 @@ class Experiment(object):
             '/{}/loss_history'.format(self.name),
             self.get_loss_history,
         )
+        self.app.router.add_get(
+            '/{}/heartbeat'.format(self.name),
+            self.heartbeat,
+        )
+
+    async def heartbeat(self, request):
+        data = await request.json()
+        client_id = data['client_id']
+        key = data['key']
+        if client_id not in self.clients:
+            print("Invalid heartbeat: Unknown Client:", client_id)
+            return web.json_response({'err': "Invalid Client"}, status=401)
+        elif self.clients[client_id]['key'] != key:
+            print("Invalid heartbeat: Invalid Key:", client_id)
+            return web.json_response({'err': "Invalid Key"}, status=401)
+        self.clients[client_id]['last_heartbeat'] = datetime.now()
+        return web.json_response("OK")
 
     async def get_loss_history(self, request):
         return web.json_response(self._update_loss_history)
@@ -63,10 +87,25 @@ class Experiment(object):
         status = await self.start_round(n_epoch)
         return web.json_response(status)
 
+    async def cull_clients(self):
+        now = datetime.now()
+        stale_clients = set()
+        for client_id, client in self.clients.items():
+            if (now - client['last_heartbeat']) > self.client_ttl:
+                stale_clients.add(client_id)
+        for stale_client in stale_clients:
+            print("Removing stale client:", stale_client)
+            self.clients.pop(stale_client)
+
     async def start_round(self, n_epoch):
         if self._update_state.get('in_progress', False):
             raise Exception("Update already in progress")
         update_name = "update_{}_{:05d}".format(self.name, self._n_updates)
+        print("Starting update:", update_name)
+        await self.cull_clients()
+        if not len(self.clients):
+            print("No clients. Aborting update.")
+            return []
         self._update_state = {
             'name': update_name,
             'clients': set(),
@@ -103,19 +142,23 @@ class Experiment(object):
     async def register(self, request):
         data = await request.json()
         client_id = "client_{}_{:08d}".format(self.name, len(self.clients))
+        key = random_key()
         state = {
             'client_id': client_id,
+            'key': key,
         }
         url = "http://{}:{}/{}/".format(request.remote, data['port'],
                                         self.name)
-        self.clients[client_id] = {
+        self.clients[client_id] = client = {
+            "key": key,
             "remote": request.remote,
             "port": data['port'],
+            "last_heartbeat": datetime.now(),
             "url": url,
             "last_update": None,
             "num_updates": 0,
         }
-        print("Registered client:", client_id)
+        print("Registered client:", client_id, client['remote'], client['port'])
         return web.json_response(state)
 
     async def update(self, request, force_end=False):
@@ -123,8 +166,12 @@ class Experiment(object):
         data = pickle.loads(body)
 
         client_id = data['client_id']
+        client_key = data['key']
         update_name = data['update_name']
 
+        if client_key != self.clients[client_id]['key']:
+            return web.json_response({'error': "Invalid Client Key"},
+                                     status=401)
         if (not self._update_state.get('in_progress', False) or
                 update_name != self._update_state['name']):
             return web.json_response({'error': "Wrong Update"}, status=410)
@@ -135,6 +182,7 @@ class Experiment(object):
         self.clients[client_id]['num_updates'] += 1
         print("Update finished: {} [{}/{}]".format(
             client_id,
+            self.clients[client_id]['remote'],
             len(self._update_state['clients_done']),
             len(self._update_state['clients']))
         )
