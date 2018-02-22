@@ -82,8 +82,9 @@ class ExperimentWorker(object):
 
 if __name__ == "__main__":
     import sys
-    port = int(sys.argv[1])
+    host = sys.argv[1]
+    port = int(sys.argv[2])
     app = web.Application()
     model = Model()
-    worker = ExperimentWorker(app, model, 'localhost:8080', port=port)
+    worker = ExperimentWorker(app, model, host, port=port)
     web.run_app(app, port=port)
