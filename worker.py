@@ -8,10 +8,11 @@ import aiohttp
 from aiohttp import web
 
 from experiments import Model
+from utils import PeriodicTask
 
 
 class ExperimentWorker(object):
-    def __init__(self, app, model, manager, name=None, port=8080):
+    def __init__(self, app, model, manager, name=None, port=8080, heartbeat_time=5):
         self.name = name or getattr(model, 'name', hash(model))
         self.model = model
         self.app = app
@@ -23,6 +24,10 @@ class ExperimentWorker(object):
         self.n_updates = 0
         self.update_in_progress = False
         self.last_update = None
+        self.client_id = None
+        self.key = None
+        self.heartbeat_time = heartbeat_time
+        self._heartbeat_manager = None
         asyncio.ensure_future(self.register_with_manager())
 
     async def register_with_manager(self):
@@ -32,7 +37,36 @@ class ExperimentWorker(object):
         async with self._session.get(url, json=data) as resp:
             response = await resp.json()
             self.client_id = response['client_id']
+            self.key = response['key']
             print("I am now:", self.client_id)
+            if self._heartbeat_manager is not None:
+                await self._heartbeat_manager.stop()
+            self._heartbeat_manager = PeriodicTask(
+                self.heartbeat,
+                self.heartbeat_time,
+            ).start()
+
+    async def heartbeat(self, timeout=1):
+        url = urljoin(self.manager_url, 'heartbeat')
+        data = {
+            'client_id': self.client_id,
+            'key': self.key,
+        }
+        try:
+            async with self._session.get(url, json=data) as resp:
+                if resp.status == 200:
+                    print(".", end='')
+                    return
+                elif resp.status == 401:
+                    print("Reregistering with manager")
+                    await self.register_with_manager()
+                    return
+        except aiohttp.client_exceptions.ClientConnectorError:
+            pass
+        print("Could not connect to master, waiting:", timeout)
+        await asyncio.sleep(timeout)
+        await self.heartbeat(timeout*2)
+        return
 
     def register_handlers(self):
         self.app.router.add_post(
@@ -67,11 +101,14 @@ class ExperimentWorker(object):
             'n_samples':  n_samples,
             'update_name':  update_name,
             'loss_history':  loss_history,
+            'key': self.key,
         }
         data = pickle.dumps(state)
         async with self._session.post(url, data=data) as resp:
             if resp.status == 200:
                 self.n_updates += 1
+            elif resp.status == 401:
+                await self.register_with_manager()
 
     def get_data(self):
         n = random.randint(5, 20)
