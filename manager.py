@@ -31,7 +31,7 @@ class Experiment(object):
         self.model = model
         self.app = app
         self.clients = {}
-        self._session = aiohttp.ClientSession()
+        self.__session = None
         self.register_handlers()
 
         self.client_ttl = timedelta(seconds=client_ttl)
@@ -40,6 +40,12 @@ class Experiment(object):
         self._update_loss_history = []
         self._stale_manager = PeriodicTask(self.cull_clients,
                                            client_ttl//2).start()
+
+    @property
+    def _session(self):
+        if not self.__session:
+            self.__session = aiohttp.ClientSession()
+        return self.__session
 
     def register_handlers(self):
         self.app.router.add_get(
@@ -175,8 +181,11 @@ class Experiment(object):
             'client_id': client_id,
             'key': key,
         }
-        url = "http://{}:{}/{}/".format(request.remote, data['port'],
-                                        self.name)
+        if data.get('url'):
+            url = data['url']
+        else:
+            url = "http://{}:{}/{}/".format(remote, data['port'],
+                                            self.name)
         self.clients[client_id] = client = {
             "key": key,
             "client_id": client_id,
@@ -187,7 +196,7 @@ class Experiment(object):
             "last_update": None,
             "num_updates": 0,
         }
-        print("Registered client:", client_id, client['remote'], client['port'])
+        print("Registered client:", client_id, client['url'], client['port'])
         return web.json_response(state)
 
     async def update(self, request):

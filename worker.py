@@ -11,14 +11,15 @@ from utils import ensure_no_collision
 
 class ExperimentWorker(object):
     def __init__(self, app, model, manager, name=None, port=8080,
-                 heartbeat_time=60):
+                 heartbeat_time=60, worker_host=None):
         self.name = name or getattr(model, 'name', hash(model))
         self.model = model
         self.app = app
         self.port = port
+        self.worker_host = worker_host
         self.manager = manager
         self.manager_url = "http://{}/{}/".format(manager, self.name)
-        self._session = aiohttp.ClientSession()
+        self.__session = None
         self.register_handlers()
         self.n_updates = 0
         self.update_in_progress = False
@@ -30,10 +31,16 @@ class ExperimentWorker(object):
         self._heartbeat_lock = asyncio.Lock()
         asyncio.ensure_future(self.register_with_manager())
 
+    @property
+    def _session(self):
+        if not self.__session:
+            self.__session = aiohttp.ClientSession()
+        return self.__session
+
     @ensure_no_collision
     async def register_with_manager(self):
         url = urljoin(self.manager_url, 'register')
-        data = {'port': self.port}
+        data = {'url': self.worker_host, 'port': self.port}
         print("registering with:", url)
         async with self._session.get(url, json=data) as resp:
             response = await resp.json()
