@@ -90,7 +90,9 @@ class ExperimentWorker(object):
                                      status=409)
         body = await request.read()
         data = pickle.loads(body)
-        if data['client_id'] != self.client_id:
+        if (request.query['client_id'] != self.client_id or
+                request.query['key'] != self.key):
+            asyncio.ensure_future(self.register_with_manager())
             return web.json_response({"err": "Wrong Client"}, status=404)
         self.last_update = update_name = data['update_name']
         self.model.load_state_dict(data['state_dict'])
@@ -105,13 +107,12 @@ class ExperimentWorker(object):
 
     async def report_update(self, update_name, n_samples, loss_history):
         url = urljoin(self.manager_url, 'update')
+        url += "?client_id={}&key={}".format(self.client_id, self.key)  # TODO: fix this
         state = {
             'state_dict':  self.model.state_dict(),
-            'client_id':  self.client_id,
             'n_samples':  n_samples,
             'update_name':  update_name,
             'loss_history':  loss_history,
-            'key': self.key,
         }
         data = pickle.dumps(state)
         async with self._session.post(url, data=data) as resp:
