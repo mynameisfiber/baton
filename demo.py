@@ -17,15 +17,10 @@ class Model(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(28*28, 100)
-        self.fc2 = nn.Linear(100, 100)
-        self.fc3 = nn.Linear(100, 10)
-        self.softmax = nn.Softmax(dim=1)
+        self.fc1 = nn.Linear(10, 1)
 
     def forward(self, X):
-        X = functional.tanh(self.fc1(X))
-        X = functional.tanh(self.fc2(X))
-        X = self.softmax(self.fc3(X))
+        X = self.fc1(X)
         return X
 
     def __hash__(self):
@@ -34,7 +29,7 @@ class Model(nn.Module):
     def train(self, X, y, n_epoch=32, lr=0.001, batch_size=32, verbose=True):
         X = autograd.Variable(X)
         y = autograd.Variable(y)
-        loss = nn.CrossEntropyLoss()
+        loss = nn.MSELoss()
         idxs = torch.randperm(X.shape[0])
         optimizer = optim.SGD(self.parameters(), lr=lr)
         loss_history = []
@@ -57,8 +52,10 @@ class Model(nn.Module):
 class LinearTestWorker(ExperimentWorker):
     def get_data(self):
         n = random.randint(5, 20)
-        X = torch.randn(32*n, 28*28)
-        _, y = torch.randn(32*n, 10).max(1)
+        p = torch.Tensor((11, 5, 3, 2, 5, 6, 2, 7, 8, 1))
+        X = torch.randn(32*n, 10)
+        y = (p * X).sum(1)
+        print(y.shape)
         return (X, y), n*32
 
 
