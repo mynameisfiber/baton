@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch import optim
-from torch.nn import functional
 from torch import autograd
 from aiohttp import web
 
@@ -60,18 +59,25 @@ class LinearTestWorker(ExperimentWorker):
 
 
 if __name__ == "__main__":
-    import sys
-    role = sys.argv[1]
-    host = sys.argv[2]
-    port = int(sys.argv[3])
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--role", type=str, help="process's role, must be 'worker' or 'manager'")
+    parser.add_argument("--manager-host", type=str, help="hostname of the experiment manager")
+    parser.add_argument("--manager-port", type=int, default=8080,
+                        help="port the manager is listening on")
+    parser.add_argument("--port", type=int, default=8081,
+                        help="communication port for this process")
+    args = parser.parse_args()
+
     app = web.Application()
 
-    if role == 'manager':
+    if args.role == 'manager':
         app = web.Application()
         manager = Manager(app)
         model = Model()
         manager.register_experiment(model)
-    elif role == 'worker':
+    elif args.role == 'worker':
         model = Model()
-        worker = LinearTestWorker(app, model, host, port=port)
-    web.run_app(app, port=port)
+        manager_host_name = args.manager_host + ":" + str(args.manager_port)
+        worker = LinearTestWorker(app, model, manager_host_name, port=args.port)
+    web.run_app(app, port=args.port)
